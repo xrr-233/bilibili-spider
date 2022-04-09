@@ -321,7 +321,7 @@ if(__name__=="__main__"):
 
     # region 获取用户mid
     result = numpy.zeros([len(tid_list), len(columns)])
-    wb = openpyxl.load_workbook('修正数据.xlsx')
+    wb = openpyxl.load_workbook('../修正数据.xlsx')
     ws = wb['Sheet1']
 
     mid_list = []
