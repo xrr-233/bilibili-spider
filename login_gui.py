@@ -1,9 +1,14 @@
+import json
 import sys
 import random
+import uuid
+import httpx
+import requests
 from PySide6.QtWidgets import *
-from PySide6.QtCore import Qt, Slot, QObject, Signal, QRect, QSize
+from PySide6.QtCore import Qt, Slot, QObject, Signal, QTimer
 from PySide6.QtGui import QPixmap
-from bilibili_api import login_func
+from bilibili_api import login, LoginError, Picture
+from bilibili_api.utils.utils import get_api
 
 from widgetgallery import WidgetGallery
 
@@ -17,7 +22,7 @@ class MyWidget(QWidget):
 
         self.button = QPushButton("SB，有本事你就来点点看")
         self.text = QLabel("<font color=red size=40>Hello World!</font>",
-                                     alignment=Qt.AlignCenter)
+                           alignment=Qt.AlignCenter)
 
         self.layout = QVBoxLayout(self)
         self.layout.addWidget(self.text)
@@ -35,103 +40,218 @@ class LoginWidget(QWidget):
         super().__init__()
         self.setWindowTitle("凭证登录")
 
-        menu_widget = QTabWidget()
-
-        item1 = QWidget()
-        item1_layout = QGridLayout(item1)
-        item1_phone_email_input = QLineEdit()
-        item1_phone_email_label = QLabel("手机号/邮箱：")
-        item1_phone_email_label.setBuddy(item1_phone_email_input)
-        item1_layout.addWidget(item1_phone_email_label, 0, 0)
-        item1_layout.addWidget(item1_phone_email_input, 0, 1)
-        item1_password_input = QLineEdit()
-        item1_password_input.setClearButtonEnabled(True)
-        item1_password_input.setEchoMode(QLineEdit.Password)
-        item1_password_label = QLabel("密码：")
-        item1_password_label.setBuddy(item1_password_input)
-        item1_layout.addWidget(item1_password_label, 1, 0)
-        item1_layout.addWidget(item1_password_input, 1, 1)
-        item1_login_button = QPushButton("登录")
-        item1_layout.addWidget(item1_login_button, 2, 0, 1, 2)
-        item1_widgets = []
-        item1_widgets.append(item1_phone_email_label)
-        item1_widgets.append(item1_phone_email_input)
-        item1_widgets.append(item1_password_label)
-        item1_widgets.append(item1_password_input)
-        item1_widgets.append(item1_login_button)
-        menu_widget.addTab(item1, "密码登录")
-
-        item2 = QWidget()
-        item2_layout = QGridLayout(item2)
-        item2_phone_input = QLineEdit()
-        item2_phone_label = QLabel("手机号：")
-        item2_phone_label.setBuddy(item2_phone_input)
-        item2_layout.addWidget(item2_phone_label, 0, 0)
-        item2_layout.addWidget(item2_phone_input, 0, 1)
-        item2_send_sms_button = QPushButton("发送验证码")
-        item2_layout.addWidget(item2_send_sms_button, 0, 2)
-        item2_auth_code_input = QLineEdit()
-        item2_auth_code_label = QLabel("验证码：")
-        item2_auth_code_label.setBuddy(item2_auth_code_input)
-        item2_layout.addWidget(item2_auth_code_label, 1, 0)
-        item2_layout.addWidget(item2_auth_code_input, 1, 1, 1, 2)
-        item2_login_button = QPushButton("登录")
-        item2_layout.addWidget(item2_login_button, 2, 0, 1, 3)
-        item2_widgets = []
-        item2_widgets.append(item2_phone_label)
-        item2_widgets.append(item2_phone_input)
-        item2_widgets.append(item2_send_sms_button)
-        item2_widgets.append(item2_auth_code_label)
-        item2_widgets.append(item2_auth_code_input)
-        item2_widgets.append(item2_login_button)
-        menu_widget.addTab(item2, "验证码登录")
-
-        item3 = QWidget()
-        item3_layout = QVBoxLayout(item3)
-        item3_qr_code_label = QLabel()
-        qrcode_data = login_func.get_qrcode()
-        item3_qr_code = QPixmap()
-        item3_qr_code.loadFromData(qrcode_data[0].content, qrcode_data[0].imageType)
-        item3_qr_code_scaled = item3_qr_code.scaled(item3_qr_code.size() / 2, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        print(qrcode_data[1])
-
-        item3_qr_code_label.setScaledContents(True)
-        item3_qr_code_label.setPixmap(item3_qr_code_scaled)
-        # self.qrcode_sec = qrcode_data[1]
-        item3_layout.addWidget(item3_qr_code_label)
-        item3_widgets = []
-        item3_widgets.append(item3_qr_code_label)
-        menu_widget.addTab(item3, "二维码登录")
-
-        menu_widget.tabBarClicked.connect(self.change_tab)
-
+        self.menu_widget = QTabWidget()
+        self.init_tab1()
+        self.init_tab2()
+        self.init_tab3()
         self.tabs = []
-        self.tabs.append(item1_widgets)
-        self.tabs.append(item2_widgets)
-        self.tabs.append(item3_widgets)
-
+        self.tabs.append(self.tab1)
+        self.tabs.append(self.tab2)
+        self.tabs.append(self.tab3)
         self.current_tab = 0
         self.hide_widgets(1)
         self.hide_widgets(2)
+        self.menu_widget.tabBarClicked.connect(self.change_tab)
 
         layout = QHBoxLayout()
-        layout.addWidget(menu_widget)
+        layout.addWidget(self.menu_widget)
         self.setLayout(layout)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setFixedWidth(self.sizeHint().width())
+        self.show()
+
+        adjust_timer = QTimer(self)
+        adjust_timer.timeout.connect(self.adjustSize)
+        adjust_timer.start(10)
+
+        self.qr_code_status_timer = None
+
+    def init_tab1(self):
+        self.tab1 = QWidget()
+        tab1_layout = QGridLayout()
+        tab1_phone_email_input = QLineEdit()
+        tab1_phone_email_input.setObjectName('tab1_phone_email_input')
+        tab1_phone_email_label = QLabel("手机号/邮箱：")
+        tab1_phone_email_label.setBuddy(tab1_phone_email_input)
+        tab1_layout.addWidget(tab1_phone_email_label, 0, 0)
+        tab1_layout.addWidget(tab1_phone_email_input, 0, 1)
+        tab1_password_input = QLineEdit()
+        tab1_password_input.setObjectName('tab1_password_input')
+        tab1_password_input.setClearButtonEnabled(True)
+        tab1_password_input.setEchoMode(QLineEdit.Password)
+        tab1_password_label = QLabel("密码：")
+        tab1_password_label.setBuddy(tab1_password_input)
+        tab1_layout.addWidget(tab1_password_label, 1, 0)
+        tab1_layout.addWidget(tab1_password_input, 1, 1)
+        tab1_hint = QLabel()
+        tab1_hint.setObjectName('tab1_hint')
+        tab1_layout.addWidget(tab1_hint, 2, 0, 1, 2)
+        tab1_hint.hide()
+        tab1_login_button = QPushButton("登录")
+        tab1_login_button.clicked.connect(self.login_with_password)
+        tab1_layout.addWidget(tab1_login_button, 3, 0, 1, 2)
+        self.tab1.setLayout(tab1_layout)
+        self.menu_widget.addTab(self.tab1, "密码登录")
+
+    def init_tab2(self):
+        self.tab2 = QWidget()
+        tab2_layout = QGridLayout()
+        tab2_phone_input = QLineEdit()
+        tab2_phone_input.setObjectName('tab2_phone_input')
+        tab2_phone_label = QLabel("手机号：")
+        tab2_phone_label.setBuddy(tab2_phone_input)
+        tab2_layout.addWidget(tab2_phone_label, 0, 0)
+        tab2_layout.addWidget(tab2_phone_input, 0, 1)
+        tab2_send_sms_button = QPushButton("发送验证码")
+        tab2_send_sms_button.clicked.connect(self.get_sms_code)
+        tab2_layout.addWidget(tab2_send_sms_button, 0, 2)
+        tab2_auth_code_input = QLineEdit()
+        tab2_auth_code_input.setObjectName('tab2_auth_code_input')
+        tab2_auth_code_label = QLabel("验证码：")
+        tab2_auth_code_label.setBuddy(tab2_auth_code_input)
+        tab2_layout.addWidget(tab2_auth_code_label, 1, 0)
+        tab2_layout.addWidget(tab2_auth_code_input, 1, 1, 1, 2)
+        tab2_hint = QLabel()
+        tab2_hint.setObjectName('tab2_hint')
+        tab2_layout.addWidget(tab2_hint, 2, 0, 1, 3)
+        tab2_hint.hide()
+        tab2_login_button = QPushButton("登录")
+        tab2_login_button.clicked.connect(self.login_with_sms)
+        tab2_layout.addWidget(tab2_login_button, 3, 0, 1, 3)
+        self.tab2.setLayout(tab2_layout)
+        self.menu_widget.addTab(self.tab2, "验证码登录")
+
+    def init_tab3(self):
+        self.tab3 = QWidget()
+        tab3_layout = QVBoxLayout()
+        tab3_qr_code_label = QLabel()
+        tab3_qr_code_label.setObjectName('tab3_qr_code_label')
+        self.qr_code_pixmap = QPixmap()
+        self.tab3.setLayout(tab3_layout)
+        tab3_qr_code_scaled = self.qr_code_pixmap.scaled(200, 200, Qt.KeepAspectRatio)
+        tab3_qr_code_label.setScaledContents(True)
+        tab3_qr_code_label.setPixmap(tab3_qr_code_scaled)
+        tab3_layout.addWidget(tab3_qr_code_label)
+        tab3_hint = QLabel()
+        tab3_hint.setObjectName('tab3_hint')
+        tab3_layout.addWidget(tab3_hint)
+        tab3_hint.hide()
+        self.menu_widget.addTab(self.tab3, "二维码登录")
 
     @Slot(int)
     def change_tab(self, index):
         if not index == self.current_tab:
+            if index == 2:
+                if self.qr_code_status_timer is None:
+                    qr_code_refresh_timer = QTimer(self.tab3)
+                    qr_code_refresh_timer.timeout.connect(self.update_qr_code)
+                    qr_code_refresh_timer.start(120000)
+                    self.qr_code_status_timer = QTimer(self.tab3)
+                    self.qr_code_status_timer.timeout.connect(self.login_with_qr_code)
+                    self.qr_code_status_timer.start(500)
+                    self.update_qr_code()
             self.hide_widgets(self.current_tab)
             self.current_tab = index
             self.show_widgets(self.current_tab)
 
     def show_widgets(self, index):
-        for widget in self.tabs[index]:
-            widget.show()
+        for widget in self.tabs[index].findChildren(QObject):
+            if isinstance(widget, QWidget) and 'hint' not in widget.objectName():
+                widget.show()
 
     def hide_widgets(self, index):
-        for widget in self.tabs[index]:
-            widget.hide()
+        for widget in self.tabs[index].findChildren(QObject):
+            if isinstance(widget, QWidget):
+                widget.hide()
+
+    def login_with_password(self):
+        widget = self.tab1
+        phone_email = widget.findChild(QLineEdit, 'tab1_phone_email_input').text()
+        password = widget.findChild(QLineEdit, 'tab1_password_input').text()
+        hint: QLabel = widget.findChild(QLabel, 'tab1_hint')
+        credential = None
+        try:
+            credential = login.login_with_password(phone_email, password)
+        except LoginError:
+            hint.setText('<font color=red>用户名或密码错误</font>')
+            hint.show()
+        if isinstance(credential, login.Check):
+            hint.setText('<font color=red>需要进行验证，请考虑使用二维码登录</font>')
+            hint.show()
+        else:
+            hint.setText('<font color=green>登录成功</font>')
+            hint.show()
+            self.setDisabled(True)
+
+    def get_sms_code(self):
+        widget = self.tab2
+        phone = widget.findChild(QLineEdit, 'tab2_phone_input').text()
+        login.send_sms(login.PhoneNumber(phone, country="+86"))  # 默认设置地区为中国大陆
+
+    def login_with_sms(self):
+        widget = self.tab2
+        phone = widget.findChild(QLineEdit, 'tab2_phone_input').text()
+        auth_code = widget.findChild(QLineEdit, 'tab2_auth_code_input').text()
+        hint: QLabel = widget.findChild(QLabel, 'tab2_hint')
+        credential = None
+        try:
+            credential = login.login_with_sms(login.PhoneNumber(phone, country="+86"), auth_code)
+        except LoginError:
+            hint.setText('<font color=red>验证码错误</font>')
+            hint.show()
+        if isinstance(credential, login.Check):
+            hint.setText('<font color=red>需要进行验证，请考虑使用二维码登录</font>')
+            hint.show()
+        else:
+            hint.setText('<font color=green>登录成功</font>')
+            hint.show()
+            self.setDisabled(True)
+
+    def update_qr_code(self):
+        api = get_api("login")["qrcode"]["get_qrcode_and_token"]
+        qr_code_login_data = json.loads(httpx.get(api["url"]).text)["data"]
+        self.login_key = qr_code_login_data["qrcode_key"]
+        self.qr_code_image = Picture.from_file(login.make_qrcode(qr_code_login_data["url"]))
+        self.qr_code_pixmap.loadFromData(self.qr_code_image.content, self.qr_code_image.imageType)
+        qr_code_scaled = self.qr_code_pixmap.scaled(200, 200, Qt.KeepAspectRatio)
+        qr_code_label: QLabel = self.tab3.findChild(QLabel, 'tab3_qr_code_label')
+        qr_code_label.setPixmap(qr_code_scaled)
+
+    def login_with_qr_code(self):
+        widget = self.tab3
+        hint: QLabel = widget.findChild(QLabel, 'tab3_hint')
+
+        events_api = get_api("login")["qrcode"]["get_events"]
+        params = {"qrcode_key": self.login_key}
+        events = json.loads(
+            requests.get(
+                events_api["url"],
+                params=params,
+                cookies={"buvid3": str(uuid.uuid1()), "Domain": ".bilibili.com"},
+            ).text
+        )
+        # {'url': 'https://passport.biligame.com/x/passport-login/web/crossDomain?DedeUserID=x&DedeUserID__ckMd5=x&Expires=x&SESSDATA=x&bili_jct=x&gourl=x', 'refresh_token': 'x', 'timestamp': 1683903305723, 'code': 0, 'message': ''}
+        if "code" in events.keys() and events["code"] == -412:
+            hint.setText('<font color=red>登录失败，请重试</font>')
+            hint.show()
+        elif events["data"]["code"] == 0:
+            hint.setText('<font color=green>登录成功</font>')
+            hint.show()
+            self.setDisabled(True)
+            # url: str = events["data"]["url"]
+            # cookies_list = url.split("?")[1].split("&")
+            # sessdata = ""
+            # bili_jct = ""
+            # dede = ""
+            # for cookie in cookies_list:
+            #     if cookie[:8] == "SESSDATA":
+            #         sessdata = cookie[9:]
+            #     if cookie[:8] == "bili_jct":
+            #         bili_jct = cookie[9:]
+            #     if cookie[:11].upper() == "DEDEUSERID=":
+            #         dede = cookie[11:]
+            # c = Credential(sessdata, bili_jct, dedeuserid=dede)
+
 
 class Communicate(QObject):
     # create two new signals on the fly: one will handle
@@ -173,5 +293,4 @@ if __name__ == '__main__':
     # gallery = WidgetGallery()
     # gallery.show()
     login_widget = LoginWidget()
-    login_widget.show()
     sys.exit(app.exec())

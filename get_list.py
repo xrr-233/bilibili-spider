@@ -61,32 +61,6 @@ credential = None
 # 关闭自动打开 geetest 验证窗口
 settings.geetest_auto_open = False
 
-if mode == 1:
-    # 密码登录
-    username = input("请输入手机号/邮箱：")
-    print("请输入密码：")
-    password = pwd_input()
-    print("正在登录...")
-    credential = login.login_with_password(username, password)
-    if isinstance(credential, login.Check):
-        # 还需验证
-        print("需要进行验证。请考虑使用二维码登录")
-        mode = 3
-    else:
-        print("登录成功")
-elif mode == 2:
-    # 验证码登录
-    phone = input("请输入手机号：")
-    print("正在登录...")
-    login.send_sms(login.PhoneNumber(phone, country="+86"))  # 默认设置地区为中国大陆
-    code = input("请输入验证码：")
-    credential = login.login_with_sms(login.PhoneNumber(phone, country="+86"), code)
-    if isinstance(credential, login.Check):
-        # 还需验证
-        print("需要进行验证。请考虑使用二维码登录")
-        mode = 3
-    else:
-        print("登录成功")
 if mode == 3:
     # 二维码登录
     print("请登录：")
