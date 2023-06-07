@@ -1,43 +1,21 @@
+import asyncio
 import json
-import sys
-import random
 import uuid
 import httpx
 import requests
 from PySide6.QtWidgets import *
 from PySide6.QtCore import Qt, Slot, QObject, Signal, QTimer
 from PySide6.QtGui import QPixmap
-from bilibili_api import login, LoginError, Picture
+from bilibili_api import login, LoginError, Picture, Credential
 from bilibili_api.utils.utils import get_api
 
 from widgetgallery import WidgetGallery
 
 
-class MyWidget(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("嘴臭孙笑川")
-
-        self.hello = ["你吼那么大声干什么", "那我凭什么关窗嘛", "那你去物管啊", "你再骂", "我操你妈"]
-
-        self.button = QPushButton("SB，有本事你就来点点看")
-        self.text = QLabel("<font color=red size=40>Hello World!</font>",
-                           alignment=Qt.AlignCenter)
-
-        self.layout = QVBoxLayout(self)
-        self.layout.addWidget(self.text)
-        self.layout.addWidget(self.button)
-
-        self.button.clicked.connect(self.magic)
-
-    @Slot()
-    def magic(self):
-        self.text.setText(f"<font color=red size=40>{random.choice(self.hello)}</font>")
-
-
 class LoginWidget(QWidget):
-    def __init__(self):
+    def __init__(self, app: QApplication):
         super().__init__()
+        self.app = app
         self.setWindowTitle("凭证登录")
 
         self.menu_widget = QTabWidget()
@@ -55,8 +33,8 @@ class LoginWidget(QWidget):
 
         layout = QHBoxLayout()
         layout.addWidget(self.menu_widget)
+        # layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
         self.setLayout(layout)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setFixedWidth(self.sizeHint().width())
         self.show()
 
@@ -65,6 +43,7 @@ class LoginWidget(QWidget):
         adjust_timer.start(10)
 
         self.qr_code_status_timer = None
+        self.credential = None
 
     def init_tab1(self):
         self.tab1 = QWidget()
@@ -88,6 +67,7 @@ class LoginWidget(QWidget):
         tab1_layout.addWidget(tab1_hint, 2, 0, 1, 2)
         tab1_hint.hide()
         tab1_login_button = QPushButton("登录")
+        tab1_login_button.setShortcut(Qt.Key_Return)
         tab1_login_button.clicked.connect(self.login_with_password)
         tab1_layout.addWidget(tab1_login_button, 3, 0, 1, 2)
         self.tab1.setLayout(tab1_layout)
@@ -165,23 +145,33 @@ class LoginWidget(QWidget):
                 widget.hide()
 
     def login_with_password(self):
+        """
+        目前使用bilibili-api的密码登录会显示"本次登录环境存在风险, 需使用手机号进行验证或绑定"
+        :return:
+        """
         widget = self.tab1
         phone_email = widget.findChild(QLineEdit, 'tab1_phone_email_input').text()
         password = widget.findChild(QLineEdit, 'tab1_password_input').text()
         hint: QLabel = widget.findChild(QLabel, 'tab1_hint')
-        credential = None
         try:
-            credential = login.login_with_password(phone_email, password)
+            self.credential = login.login_with_password(phone_email, password)
         except LoginError:
             hint.setText('<font color=red>用户名或密码错误</font>')
             hint.show()
-        if isinstance(credential, login.Check):
+            return
+        except Exception as e:
+            print(e)
+        if isinstance(self.credential, login.Check):
             hint.setText('<font color=red>需要进行验证，请考虑使用二维码登录</font>')
             hint.show()
         else:
             hint.setText('<font color=green>登录成功</font>')
             hint.show()
             self.setDisabled(True)
+
+            destroy_timer = QTimer(self)
+            destroy_timer.timeout.connect(self.app.exit)
+            destroy_timer.start(1000)
 
     def get_sms_code(self):
         widget = self.tab2
@@ -189,23 +179,31 @@ class LoginWidget(QWidget):
         login.send_sms(login.PhoneNumber(phone, country="+86"))  # 默认设置地区为中国大陆
 
     def login_with_sms(self):
+        """
+        目前bilibili-api的sms功能正在修复中，待填坑（懒得整了，直接扫码吧）
+        :return:
+        """
         widget = self.tab2
         phone = widget.findChild(QLineEdit, 'tab2_phone_input').text()
         auth_code = widget.findChild(QLineEdit, 'tab2_auth_code_input').text()
         hint: QLabel = widget.findChild(QLabel, 'tab2_hint')
-        credential = None
         try:
-            credential = login.login_with_sms(login.PhoneNumber(phone, country="+86"), auth_code)
+            self.credential = login.login_with_sms(login.PhoneNumber(phone, country="+86"), auth_code)
         except LoginError:
             hint.setText('<font color=red>验证码错误</font>')
             hint.show()
-        if isinstance(credential, login.Check):
+            return
+        if isinstance(self.credential, login.Check):
             hint.setText('<font color=red>需要进行验证，请考虑使用二维码登录</font>')
             hint.show()
         else:
             hint.setText('<font color=green>登录成功</font>')
             hint.show()
             self.setDisabled(True)
+
+            destroy_timer = QTimer(self)
+            destroy_timer.timeout.connect(self.app.exit)
+            destroy_timer.start(1000)
 
     def update_qr_code(self):
         api = get_api("login")["qrcode"]["get_qrcode_and_token"]
@@ -222,11 +220,10 @@ class LoginWidget(QWidget):
         hint: QLabel = widget.findChild(QLabel, 'tab3_hint')
 
         events_api = get_api("login")["qrcode"]["get_events"]
-        params = {"qrcode_key": self.login_key}
         events = json.loads(
             requests.get(
                 events_api["url"],
-                params=params,
+                params={"qrcode_key": self.login_key},
                 cookies={"buvid3": str(uuid.uuid1()), "Domain": ".bilibili.com"},
             ).text
         )
@@ -238,19 +235,24 @@ class LoginWidget(QWidget):
             hint.setText('<font color=green>登录成功</font>')
             hint.show()
             self.setDisabled(True)
-            # url: str = events["data"]["url"]
-            # cookies_list = url.split("?")[1].split("&")
-            # sessdata = ""
-            # bili_jct = ""
-            # dede = ""
-            # for cookie in cookies_list:
-            #     if cookie[:8] == "SESSDATA":
-            #         sessdata = cookie[9:]
-            #     if cookie[:8] == "bili_jct":
-            #         bili_jct = cookie[9:]
-            #     if cookie[:11].upper() == "DEDEUSERID=":
-            #         dede = cookie[11:]
-            # c = Credential(sessdata, bili_jct, dedeuserid=dede)
+
+            url: str = events["data"]["url"]
+            cookies_list = url.split("?")[1].split("&")
+            sessdata = ""
+            bili_jct = ""
+            dede = ""
+            for cookie in cookies_list:
+                if cookie[:8] == "SESSDATA":
+                    sessdata = cookie[9:]
+                if cookie[:8] == "bili_jct":
+                    bili_jct = cookie[9:]
+                if cookie[:11].upper() == "DEDEUSERID=":
+                    dede = cookie[11:]
+            self.credential = Credential(sessdata, bili_jct, dedeuserid=dede)
+
+            destroy_timer = QTimer(self)
+            destroy_timer.timeout.connect(self.app.exit)
+            destroy_timer.start(1000)
 
 
 class Communicate(QObject):
@@ -275,22 +277,21 @@ class Communicate(QObject):
             print("This is a string:", arg)
 
 
-if __name__ == '__main__':
-    # app = QApplication([])
-    # widget = MyWidget()
-    # widget.resize(800, 600)
-    # widget.show()
-    # sys.exit(app.exec())
-
-    # app = QApplication([])
-    # someone = Communicate()
-    # # emit 'speak' signal with different arguments.
-    # # we have to specify the str as int is the default
-    # someone.speak.emit(10)
-    # someone.speak[str].emit("Hello everybody!")
-
+async def login_gui():
     app = QApplication()
     # gallery = WidgetGallery()
     # gallery.show()
-    login_widget = LoginWidget()
-    sys.exit(app.exec())
+    login_widget = LoginWidget(app)
+    app.exec()
+
+    credential: Credential = login_widget.credential
+    valid = await credential.check_valid()
+    if not valid:
+        print('Cookie无效！')
+        exit(-1)
+    return credential
+
+
+if __name__ == '__main__':
+    # asyncio.get_event_loop().run_until_complete(main())
+    login_gui()
