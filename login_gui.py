@@ -285,7 +285,10 @@ async def login_gui():
     app.exec()
 
     credential: Credential = login_widget.credential
-    valid = await credential.check_valid()
+    try:
+        valid = await credential.check_valid()
+    except:
+        exit(-1)
     if not valid:
         print('Cookie无效！')
         exit(-1)
